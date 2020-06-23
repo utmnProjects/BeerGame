@@ -1,0 +1,170 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.SignalR.Client
+@inject IJSRuntime JSRunTime
+@inject IUserService userService
+@inject IRoomService roomService
+@inject NavigationManager NavigationManager
+
+@if (userStatus == UserStatus.NewUser)
+{
+    <h1>Добро пожаловать.</h1>
+    <p>Введите имя:</p>
+    <div class="input-group" style="width:500px;">
+        <input type="text" @bind="@Name" class="form-control" placeholder="Имя" aria-label="" aria-describedby="basic-addon1">
+        <div class="input-group-append">
+            <button class="btn btn-outline-dark" type="button" @onclick="SignIn">Войти</button>
+        </div>
+    </div>
+}
+
+@if (userStatus == UserStatus.InRoomList)
+{
+    <div id="room">
+        <div class="list-group" style="width:1000px; float:left">
+            <h2>Список комнат:</h2>
+            @foreach (var el in rooms)
+            {
+                <div class="list-group-item list-group-item-action flex-column align-items-start active mt-1">
+                    <div class="d-flex w-100 justify-content-between">
+                        <h5 class="mb-1">@el.Name</h5>
+                    </div>
+                    <button @onclick="(() => JoinRoom(el.Id))" class="btn btn-dark">Вход </button>
+                </div>
+            }
+        </div>
+
+        
+        <div id="addRoomForm" style="position:relative; margin-top:50px; margin-left:10px; float:left; width:550px">
+            <button type="button" class="btn btn-outline-dark" @onclick="ViewAddFormRoom">Создать новую комнату</button>
+            @if (Form)
+            {
+                <div>
+                    <EditForm Model="roomModel" OnValidSubmit="CreateRoom">
+                        <div class="form-group">
+                            <label for="formInputRoomname">Название комнаты:</label>
+                            <input type="text" id="formInputRoomname" @bind-value="roomModel.Name" placeholder="Название" class="form-control" />
+                        </div>
+                        <div class="form-group">
+                            <label for="formInputMaxCount">Количество человек:</label>
+                            <input type="number" id="formInputMaxCount" @bind-value="roomModel.MaxCount" placeholder="Кол-во" class="form-control" />
+                        </div>
+                        <button type="submit" class="btn btn-primary">Создать</button>
+                    </EditForm>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if (userStatus == UserStatus.InRoom)
+{
+    <div class="room" style="width:700px; float:left;">
+        <h3>Комната: @currentRoom.Name</h3>
+        <div>
+            <ul>
+                @foreach (var el in currentRoom.User)
+                {
+                    <li>@el.Name</li>
+                }
+            </ul>
+        </div>
+    </div>
+    <div class="exitFromRoom" style="float:left">
+        <button type="button" class="btn btn-outline-dark" @onclick="LeaveRoom">Выйти из комнаты</button>
+    </div>
+}
+
+@if (userStatus == UserStatus.InGame)
+{
+
+}
+
+@*<SurveyPrompt Title="How is Blazor working for you?" />*@
+
+
+@code {
+    //hub
+    private HubConnection hubConnection;
+    //user status
+    UserStatus userStatus;
+    //if new user
+    public string Name { get; set; }
+    //if signIn user
+    private List<Room> rooms = new List<Room>();
+    private User currentUser = new User();
+    private Room roomModel = new Room();
+
+    [Parameter]
+    public string Id { get; set; }
+
+    public bool Form = false;
+    //if joined user
+    Room currentRoom = new Room();
+    //if game is start
+
+    protected override async Task OnInitializedAsync()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(NavigationManager.ToAbsoluteUri("/gameHub"))
+            .Build();
+
+        hubConnection.On<string>("ErrorMessage", async (message) => {
+            await JSRunTime.InvokeVoidAsync("alert", new[] { message });
+        });
+
+        hubConnection.On<string>("LoadRoomList", (userId) => {
+            rooms = roomService.AllRooms();
+            userStatus = UserStatus.InRoomList;
+            StateHasChanged();
+        });
+
+        hubConnection.On("UpdateRoomList", () => {
+            rooms = roomService.AllRooms();
+            StateHasChanged();
+        });
+
+        hubConnection.On<int>("EnterRoom", (roomId) => {
+            currentRoom = roomService.GetCurrentRoomById(roomId);
+            userStatus = UserStatus.InRoom;
+            StateHasChanged();
+        });
+
+        hubConnection.On("UpdateRoom", () => {
+            currentRoom = roomService.GetCurrentRoomById(currentRoom.Id);
+            StateHasChanged();
+        });
+
+        hubConnection.On("LeaveRoom", () => {
+            currentRoom = null;
+            rooms = roomService.AllRooms();
+            userStatus = UserStatus.InRoomList;
+            StateHasChanged();
+        });
+
+        await hubConnection.StartAsync();
+    }
+
+    public async Task ViewAddFormRoom() => Form = !Form;
+
+    public async Task SignIn() {
+        if (userService.IsExistsUser(Name)) {
+            await JSRunTime.InvokeVoidAsync("alert", new[] { "Пользователь с таким именем уже существует" });
+            return;
+        }
+        await hubConnection.SendAsync("SignInAsync", Name);
+    }
+
+    public async Task CreateRoom() {
+        if (roomService.IsRoomExists(roomModel.Name)) {
+            await JSRunTime.InvokeVoidAsync("alert", new[] { "Комната с таким именем уже существует" });
+            return;
+        }
+        await hubConnection.SendAsync("CreateNewRoomAsync", roomModel.Name, roomModel.MaxCount);
+    }
+
+    public async Task JoinRoom(int roomId) =>
+        await hubConnection.SendAsync("JoinRoomAsync", roomId);
+
+    public async Task LeaveRoom() =>
+        await hubConnection.SendAsync("LeaveRoomAsync", currentRoom.Id);
+}
